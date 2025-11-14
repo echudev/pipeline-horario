@@ -1,3 +1,11 @@
+# Cargar la variable de entorno `GOOGLE_APPLICATION_CREDENTIALS` en tu entorno virtual (`venv`) de Python
+
+Esta guía te mostrará cómo cargar la variable de entorno `GOOGLE_APPLICATION_CREDENTIALS` en tu entorno virtual (`venv`) de Python.
+
+Basado en la [Documentación de Google Cloud](https://docs.cloud.google.com/docs/authentication/set-up-adc-local-dev-environment?hl=es)
+
+## Descripción
+
 Para cargar una variable de entorno como `GOOGLE_APPLICATION_CREDENTIALS` en tu entorno virtual (`venv`) de Python, simplemente la estableces en la **terminal activa** *después* de haber activado el `venv`.
 
 Aquí tienes los pasos exactos para los sistemas operativos más comunes:
@@ -66,4 +74,4 @@ client = bigquery.Client(project=PROJECT_ID)
 
 Las variables de entorno establecidas con `export` o `set` son **temporales** y solo existen para la sesión de terminal actual. Si cierras la terminal o desactivas el `venv` (con el comando `deactivate`), tendrás que volver a cargar la variable la próxima vez que trabajes.
 
-Si quieres que la variable se cargue automáticamente cada vez que activas el `venv`, puedes añadir la línea `export GOOGLE_APPLICATION_CREDENTIALS="..."` al archivo **`activate`** que se encuentra dentro del directorio `/ruta/a/tu/venv/bin/`.
+Si quieres que la variable se cargue automáticamente cada vez que activas el `venv`, puedes añadir la línea `export GOOGLE_APPLICATION_CREDENTIALS="..."` al archivo **`activate`** que se encuentra dentro del directorio `/ruta/a/tu/venv/bin/`
