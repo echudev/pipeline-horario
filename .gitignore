@@ -1,0 +1,41 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+secrets/
+
+# Virtual environments
+.venv
+venv/
+env/
+
+# Environment variables
+.env
+.env.local
+
+# Output files
+output/
+*.xlsx
+*.xls
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Service account keys (security)
+**/service-account-key.json
+**/*.json.key
