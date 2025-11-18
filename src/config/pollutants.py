@@ -3,7 +3,7 @@ Configuration for pollutant tables and metrics
 """
 from typing import Dict, List
 
-TABLE_CONFIG: Dict[str, Dict[str, List[str]]] = {
+TABLE_CONFIG: Dict[str,dict] = {
     'co': {
         'table': 'co_minutales',
         'metrics': ['co_mean']

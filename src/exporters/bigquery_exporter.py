@@ -3,9 +3,9 @@ from google.cloud.exceptions import NotFound
 import polars as pl
 
 def export_to_bigquery(
-    project_id: str,
-    dataset_id: str,
-    table_id: str,
+    project_id: str | None,
+    dataset_id: str | None,
+    table_id: str | None,
     df: pl.DataFrame,
     ) -> None:
     """
@@ -15,6 +15,14 @@ def export_to_bigquery(
         df: Polars DataFrame to export
         table_id: BigQuery table ID
     """
+    if df.is_empty():
+        print("El DataFrame está vacío. No se exportarán datos a BigQuery.")
+        return
+    if not all(col in df.columns for col in ["time", "location", "metrica", "valor", "count_ok"]):
+        raise ValueError("El DataFrame debe contener las columnas: time, location, metrica, valor, count_ok")
+    if not project_id or not dataset_id or not table_id:
+        raise ValueError("project_id, dataset_id y table_id son obligatorios para exportar a BigQuery.")
+    
     TABLE_FULL_ID = f"{project_id}.{dataset_id}.{table_id}"
     # Inicializar el cliente de BigQuery
     client = bigquery.Client(project=project_id)

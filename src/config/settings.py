@@ -12,19 +12,23 @@ class Settings:
     """Application settings loaded from environment variables"""
     
     # InfluxDB Configuration
-    INFLUXDB_HOST: str = os.getenv("INFLUXDB_HOST")
-    INFLUXDB_TOKEN: str = os.getenv("INFLUXDB_TOKEN")
-    INFLUXDB_DATABASE: str = os.getenv("INFLUXDB_DATABASE")
+    INFLUXDB_HOST: str | None = os.getenv("INFLUXDB_HOST")
+    INFLUXDB_TOKEN: str | None = os.getenv("INFLUXDB_TOKEN")
+    INFLUXDB_DATABASE: str | None = os.getenv("INFLUXDB_DATABASE")
     
     # BigQuery Configuration
-    GOOGLE_PROJECT_ID: str = os.getenv("GOOGLE_PROJECT_ID")
-    BIGQUERY_DATASET_ID: str = os.getenv("BIGQUERY_DATASET_ID")
-    BIGQUERY_TABLE_ID: str = os.getenv("BIGQUERY_TABLE_ID")
+    GOOGLE_PROJECT_ID: str | None = os.getenv("GOOGLE_PROJECT_ID")
+    BIGQUERY_DATASET_ID: str | None = os.getenv("BIGQUERY_DATASET_ID")
+    BIGQUERY_TABLE_ID: str | None = os.getenv("BIGQUERY_TABLE_ID")
 
     # Pipeline Configuration
-    PIPELINE_VERSION: str = os.getenv("PIPELINE_VERSION")
+    PIPELINE_VERSION: str = os.getenv("PIPELINE_VERSION", "v1.0.0")
     OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "output")
     OUTPUT_FILENAME: str = os.getenv("OUTPUT_FILENAME", f"{time.strftime('%Y%m%d%H')}_contaminantes_horarios.xlsx")
+
+    # MotherDuck Configuration
+    MOTHERDUCK_TOKEN: str | None = os.getenv("MOTHERDUCK_TOKEN")
+    MOTHERDUCK_DATABASE: str | None = os.getenv("MOTHERDUCK_DATABASE")
     
     # Logging Configuration
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
