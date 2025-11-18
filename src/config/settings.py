@@ -12,17 +12,17 @@ class Settings:
     """Application settings loaded from environment variables"""
     
     # InfluxDB Configuration
-    INFLUXDB_HOST: str | None = os.getenv("INFLUXDB_HOST")
+    INFLUXDB_HOST: str | None = os.getenv("INFLUXDB_HOST", "https://us-east-1-1.aws.cloud2.influxdata.com/")
     INFLUXDB_TOKEN: str | None = os.getenv("INFLUXDB_TOKEN")
-    INFLUXDB_DATABASE: str | None = os.getenv("INFLUXDB_DATABASE")
+    INFLUXDB_DATABASE: str | None = os.getenv("INFLUXDB_DATABASE", "minutales")
     
     # BigQuery Configuration
-    GOOGLE_PROJECT_ID: str | None = os.getenv("GOOGLE_PROJECT_ID")
-    BIGQUERY_DATASET_ID: str | None = os.getenv("BIGQUERY_DATASET_ID")
-    BIGQUERY_TABLE_ID: str | None = os.getenv("BIGQUERY_TABLE_ID")
+    GOOGLE_PROJECT_ID: str | None = os.getenv("GOOGLE_PROJECT_ID", "pruebas-477910")
+    BIGQUERY_DATASET_ID: str | None = os.getenv("BIGQUERY_DATASET_ID", "test_dataset")
+    BIGQUERY_TABLE_ID: str | None = os.getenv("BIGQUERY_TABLE_ID", "promedios_horarios")
 
     # Pipeline Configuration
-    PIPELINE_VERSION: str = os.getenv("PIPELINE_VERSION", "v1.0.0")
+    PIPELINE_VERSION: str = os.getenv("PIPELINE_VERSION", "v0.8.6")
     OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "output")
     OUTPUT_FILENAME: str = os.getenv("OUTPUT_FILENAME", f"{time.strftime('%Y%m%d%H')}_contaminantes_horarios.xlsx")
 

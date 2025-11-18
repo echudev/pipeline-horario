@@ -10,9 +10,9 @@ import polars as pl
 
 from config import get_settings, TABLE_CONFIG, POLLUTANTS_TO_PROCESS
 from influxdb import get_influxdb_client, fetch_data
-from bigquery import get_bigquery_client, create_bigquery_client
+from bigquery import get_bigquery_client
 from transformers import aggregate_to_long_format, build_metric_columns
-from exporters import export_to_excel, export_to_bigquery
+from exporters import export_to_bigquery
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +105,13 @@ class PipelineOrchestrator:
                 dataframes
             )
             
-            # Step 3: Export to Excel
-            output_path = self.settings.output_path
-            export_to_excel(contaminantes_horarios, output_path)
+            # Step 3: EXPORTERS
+
+            # Export to Excel
+            #output_path = self.settings.output_path
+            #export_to_excel(contaminantes_horarios, output_path)
+
+            # Export to BigQuery
             export_to_bigquery(
                 project_id=self.settings.GOOGLE_PROJECT_ID,
                 dataset_id=self.settings.BIGQUERY_DATASET_ID,
