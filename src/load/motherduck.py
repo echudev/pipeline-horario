@@ -1,4 +1,34 @@
+import duckdb
 import polars as pl
+from config.settings import get_settings
+
+
+def create_motherduck_client() -> duckdb.DuckDBPyConnection:
+    """
+    Create and return a MotherDuck client instance using settings from config.
+    
+    Returns:
+        DuckDBPyConnection: Configured MotherDuck client
+    """
+    settings = get_settings()
+    return duckdb.connect(f'md:{settings.MOTHERDUCK_DATABASE}?motherduck_token={settings.MOTHERDUCK_TOKEN}')
+
+# Global client instance (lazy initialization)
+_client: duckdb.DuckDBPyConnection | None = None
+
+def get_motherduck_client() -> duckdb.DuckDBPyConnection:
+    """
+    Get or create the global MotherDuck client instance.
+    
+    Returns:
+        DuckDBPyConnection: The global client instance of MotherDuck
+    """
+    global _client
+    if _client is None:
+        _client = create_motherduck_client()
+        print(f"Connected to MotherDuck database")
+    return _client
+
 
 def export_to_motherduck(
     motherduck_client,

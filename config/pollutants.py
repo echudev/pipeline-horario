@@ -1,9 +1,9 @@
 """
-Configuration for pollutant tables and metrics
+Pollutants configuration module
 """
 from typing import Dict, List
 
-TABLE_CONFIG: Dict[str,dict] = {
+TABLE_CONFIG: Dict[str, dict] = {
     'co': {
         'table': 'co_minutales',
         'metrics': ['co_mean']
@@ -34,4 +34,3 @@ TABLE_CONFIG: Dict[str,dict] = {
 POLLUTANTS_TO_PROCESS: List[str] = [
     key for key in TABLE_CONFIG.keys() if key != 'meteo'
 ]
-

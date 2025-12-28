@@ -3,27 +3,39 @@ Pipeline orchestrator - coordinates data fetching, transformation, and export
 """
 import asyncio
 import logging
+import sys
 import time
+from pathlib import Path
 from typing import List
 
 import polars as pl
 
-from config import get_settings, TABLE_CONFIG, POLLUTANTS_TO_PROCESS
-from influxdb import get_influxdb_client, fetch_data
-from bigquery import get_bigquery_client
-from transformers import aggregate_to_long_format, build_metric_columns
-from exporters import export_to_bigquery
+from config import get_settings
+from src.extract import db_extractor as influxdb
+from src.load import bigquery
+from src.transform import transform_metrics as transformers
+import atexit
 
 logger = logging.getLogger(__name__)
 
 
 class PipelineOrchestrator:
     """Orchestrates the entire pipeline execution"""
-    
+
     def __init__(self):
         self.settings = get_settings()
-        self.influxdb_client = get_influxdb_client()
-        self.bigquery_client = get_bigquery_client()
+        self.influxdb_client = influxdb.get_influxdb_client()
+        self.bigquery_client = bigquery.get_bigquery_client()
+        # Register cleanup on exit
+        atexit.register(self.cleanup)
+
+    def cleanup(self) -> None:
+        """Clean up resources"""
+        try:
+            influxdb.close_influxdb_client()
+        except Exception:
+            # Ignore cleanup errors
+            pass
     
     async def fetch_all_data(self) -> List[pl.DataFrame]:
         """
@@ -32,12 +44,12 @@ class PipelineOrchestrator:
         Returns:
             List of DataFrames, one per pollutant
         """
-        logger.info(f"Fetching data for {len(POLLUTANTS_TO_PROCESS)} pollutants")
+        logger.info(f"Fetching data for {len(influxdb.POLLUTANTS_TO_PROCESS)} pollutants")
         
         try:
             dataframes = await asyncio.gather(*[
-                fetch_data(self.influxdb_client, pollutant) 
-                for pollutant in POLLUTANTS_TO_PROCESS
+                influxdb.fetch_data(self.influxdb_client, pollutant) 
+                for pollutant in influxdb.POLLUTANTS_TO_PROCESS
             ])
             logger.info(f"Successfully fetched data for all pollutants")
             return dataframes
@@ -65,14 +77,14 @@ class PipelineOrchestrator:
         transformed_dataframes = []
         for pollutant, df in zip(pollutants, dataframes):
             try:
-                config = TABLE_CONFIG[pollutant]
+                config = influxdb.TABLE_CONFIG[pollutant]
                 metrics = config['metrics']
                 
                 # Build metric columns mapping
-                metric_columns = build_metric_columns(metrics)
+                metric_columns = transformers.build_metric_columns(metrics)
                 
                 # Transform the dataframe
-                transformed_df = aggregate_to_long_format(
+                transformed_df = transformers.aggregate_to_long_format(
                     df,
                     metric_columns=metric_columns,
                     version=self.settings.PIPELINE_VERSION
@@ -101,7 +113,7 @@ class PipelineOrchestrator:
             
             # Step 2: Transform all dataframes
             contaminantes_horarios = self.transform_all_data(
-                POLLUTANTS_TO_PROCESS,
+                influxdb.POLLUTANTS_TO_PROCESS,
                 dataframes
             )
             
@@ -112,7 +124,7 @@ class PipelineOrchestrator:
             #export_to_excel(contaminantes_horarios, output_path)
 
             # Export to BigQuery
-            export_to_bigquery(
+            bigquery.export_to_bigquery(
                 project_id=self.settings.GOOGLE_PROJECT_ID,
                 dataset_id=self.settings.BIGQUERY_DATASET_ID,
                 table_id=self.settings.BIGQUERY_TABLE_ID,
@@ -126,4 +138,50 @@ class PipelineOrchestrator:
             elapsed_time = time.time() - start_time
             logger.error(f"Pipeline failed after {elapsed_time:.2f} seconds: {e}")
             raise
+
+
+def setup_logging(log_level: str = "INFO"):
+    """Configure logging"""
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+
+async def main():
+    """Main entry point"""
+    # Setup logging first with default level
+    setup_logging()
+    logger = logging.getLogger(__name__)
+
+    orchestrator = None
+    try:
+        # Get settings (will validate configuration)
+        settings = get_settings()
+        # Update logging level from settings if available
+        setup_logging(settings.LOG_LEVEL)
+        logger = logging.getLogger(__name__)
+
+        orchestrator = PipelineOrchestrator()
+        await orchestrator.run()
+    except ValueError as e:
+        # Configuration error
+        logger.error(f"Configuration error: {e}")
+        logger.error("Please set INFLUXDB_TOKEN in your .env file or environment variables")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("Pipeline interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}", exc_info=True)
+        sys.exit(1)
+    finally:
+        # Ensure cleanup happens
+        if orchestrator:
+            orchestrator.cleanup()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
