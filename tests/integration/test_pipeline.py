@@ -2,7 +2,6 @@
 Integration tests for the complete pipeline
 """
 import pytest
-import asyncio
 from unittest.mock import Mock, patch, AsyncMock
 import polars as pl
 from datetime import datetime, timezone
@@ -56,15 +55,15 @@ class TestPipelineIntegration:
             'nox': pl.DataFrame({**common_data, 'no_mean': [10.0, 15.0, 20.0], 'no2_mean': [5.0, 7.5, 10.0], 'nox_mean': [15.0, 22.5, 30.0]}),
             'pm10': pl.DataFrame({**common_data, 'pm10_mean': [25.0, 30.0, 35.0]}),
             'so2': pl.DataFrame({**common_data, 'so2_mean': [5.0, 6.0, 7.0]}),
-            'o3': pl.DataFrame({**common_data, 'o3_mean': [40.0, 45.0, 50.0]})
+            'o3': pl.DataFrame({**common_data, 'o3_mean': [40.0, 45.0, 50.0]}),
+            'meteo': pl.DataFrame({**common_data, 'dv_mean': [180.0, 185.0, 190.0], 'vv_mean': [5.0, 6.0, 7.0], 'temp_mean': [20.0, 21.0, 22.0], 'hr_mean': [65.0, 67.0, 70.0], 'pa_mean': [1013.0, 1012.0, 1014.0], 'uv_mean': [3.0, 4.0, 5.0], 'lluvia_mean': [0.0, 0.1, 0.2], 'rs_mean': [200.0, 250.0, 300.0]})
         }
 
     @pytest.mark.asyncio
     async def test_fetch_all_data_success(self, mock_settings, sample_dataframes_by_pollutant):
         """Test successful data fetching for all pollutants"""
         with patch('src.orchestation.pipeline.get_settings', return_value=mock_settings), \
-             patch('src.orchestation.pipeline.influxdb.get_influxdb_client') as mock_client, \
-             patch('src.orchestation.pipeline.bigquery.get_bigquery_client') as mock_bq_client, \
+             patch('src.orchestation.pipeline.bigquery.get_bigquery_client', return_value=Mock()), \
              patch('src.orchestation.pipeline.influxdb.fetch_data', new_callable=AsyncMock) as mock_fetch:
 
             # Setup mocks - return appropriate dataframe based on pollutant
@@ -79,11 +78,11 @@ class TestPipelineIntegration:
             result = await orchestrator.fetch_all_data()
 
             # Verify results
-            assert len(result) == 5  # Should fetch for all pollutants
+            assert len(result) == 6  # Should fetch for all pollutants (including meteo)
             assert all(isinstance(df, pl.DataFrame) for df in result)
 
             # Verify fetch_data was called for each pollutant
-            assert mock_fetch.call_count == 5
+            assert mock_fetch.call_count == 6
 
     def test_transform_all_data_success(self, mock_settings, sample_dataframes_by_pollutant):
         """Test successful data transformation"""

@@ -26,7 +26,7 @@ def get_motherduck_client() -> duckdb.DuckDBPyConnection:
     global _client
     if _client is None:
         _client = create_motherduck_client()
-        print(f"Connected to MotherDuck database")
+        print("Connected to MotherDuck database")
     return _client
 
 

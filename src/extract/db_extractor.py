@@ -1,7 +1,6 @@
 """
 Repository for fetching data from InfluxDB
 """
-from typing import Dict, List
 from influxdb_client_3 import InfluxDBClient3
 from config.settings import get_settings
 from config.pollutants import TABLE_CONFIG, POLLUTANTS_TO_PROCESS

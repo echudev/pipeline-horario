@@ -26,11 +26,11 @@ TABLE_CONFIG: Dict[str, dict] = {
     },
     'meteo': {
         'table': 'meteo_minutales',
-        'metrics': ['*']  # All columns
+        'metrics': ['dv_mean', 'vv_mean', 'temp_mean', 'hr_mean', 'pa_mean', 'uv_mean', 'lluvia_mean', 'rs_mean']
     }
 }
 
-# Pollutants to process in the pipeline (excludes 'meteo')
+# Pollutants to process in the pipeline (includes 'meteo')
 POLLUTANTS_TO_PROCESS: List[str] = [
-    key for key in TABLE_CONFIG.keys() if key != 'meteo'
+    key for key in TABLE_CONFIG.keys()
 ]

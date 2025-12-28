@@ -5,12 +5,11 @@ import asyncio
 import logging
 import sys
 import time
-from pathlib import Path
 from typing import List
 
 import polars as pl
 
-from config import get_settings
+from config import get_settings, POLLUTANTS_TO_PROCESS
 from src.extract import db_extractor as influxdb
 from src.load import bigquery
 from src.transform import transform_metrics as transformers
@@ -51,7 +50,7 @@ class PipelineOrchestrator:
                 influxdb.fetch_data(self.influxdb_client, pollutant) 
                 for pollutant in influxdb.POLLUTANTS_TO_PROCESS
             ])
-            logger.info(f"Successfully fetched data for all pollutants")
+            logger.info("Successfully fetched data for all pollutants")
             return dataframes
         except Exception as e:
             logger.error(f"Error fetching data: {e}")
