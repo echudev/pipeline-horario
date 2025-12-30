@@ -3,7 +3,7 @@ Repository for fetching data from InfluxDB
 """
 from influxdb_client_3 import InfluxDBClient3
 from config.settings import get_settings
-from config.pollutants import TABLE_CONFIG, POLLUTANTS_TO_PROCESS
+from config.pollutants import TABLE_CONFIG
 
 
 def create_client() -> InfluxDBClient3:

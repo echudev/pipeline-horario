@@ -43,12 +43,12 @@ class PipelineOrchestrator:
         Returns:
             List of DataFrames, one per pollutant
         """
-        logger.info(f"Fetching data for {len(influxdb.POLLUTANTS_TO_PROCESS)} pollutants")
+        logger.info(f"Fetching data for {len(POLLUTANTS_TO_PROCESS)} pollutants")
         
         try:
             dataframes = await asyncio.gather(*[
                 influxdb.fetch_data(self.influxdb_client, pollutant) 
-                for pollutant in influxdb.POLLUTANTS_TO_PROCESS
+                for pollutant in POLLUTANTS_TO_PROCESS
             ])
             logger.info("Successfully fetched data for all pollutants")
             return dataframes
@@ -112,7 +112,7 @@ class PipelineOrchestrator:
             
             # Step 2: Transform all dataframes
             contaminantes_horarios = self.transform_all_data(
-                influxdb.POLLUTANTS_TO_PROCESS,
+                POLLUTANTS_TO_PROCESS,
                 dataframes
             )
             
