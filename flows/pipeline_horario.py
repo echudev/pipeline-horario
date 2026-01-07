@@ -1,6 +1,7 @@
 """
 Pipeline principal para procesamiento de datos horarios de contaminantes
 """
+
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import List
@@ -34,9 +35,11 @@ from src.utils.exporters import (
     retries=2,
     retry_delay_seconds=60,
     cache_policy=INPUTS,
-    cache_expiration=timedelta(hours=1)  # Cache for 1 hour
+    cache_expiration=timedelta(hours=1),  # Cache for 1 hour
 )
-async def fetch_pollutant_data(pollutant: str, last_processed_hour: datetime | None = None) -> pl.DataFrame:
+async def fetch_pollutant_data(
+    pollutant: str, last_processed_hour: datetime | None = None
+) -> pl.DataFrame:
     """
     Task para obtener datos de un contaminante específico desde InfluxDB
 
@@ -65,21 +68,21 @@ async def fetch_pollutant_data(pollutant: str, last_processed_hour: datetime | N
 @task(
     name="transform_pollutant_data",
     cache_policy=INPUTS,
-    cache_expiration=timedelta(hours=24)  # Cache for 24 hours since transformations are stable
+    cache_expiration=timedelta(
+        hours=24
+    ),  # Cache for 24 hours since transformations are stable
 )
 def transform_pollutant_data(
-    pollutant: str,
-    df: pl.DataFrame,
-    pipeline_version: str
+    pollutant: str, df: pl.DataFrame, pipeline_version: str
 ) -> pl.DataFrame:
     """
     Task para transformar datos de un contaminante de formato wide a long
-    
+
     Args:
         pollutant: Nombre del contaminante
         df: DataFrame con datos en formato wide
         pipeline_version: Versión del pipeline
-    
+
     Returns:
         pl.DataFrame: DataFrame transformado en formato long
     """
@@ -89,16 +92,14 @@ def transform_pollutant_data(
 
     try:
         config = TABLE_CONFIG[pollutant]
-        metrics = config['metrics']
+        metrics = config["metrics"]
 
         # Build metric columns mapping
         metric_columns = build_metric_columns(metrics)
 
         # Transform the dataframe
         transformed_df = aggregate_to_long_format(
-            df,
-            metric_columns=metric_columns,
-            version=pipeline_version
+            df, metric_columns=metric_columns, version=pipeline_version
         )
 
         output_rows = len(transformed_df)
@@ -127,10 +128,7 @@ def export_to_excel_task(df: pl.DataFrame, output_path: str) -> None:
 
 @task(name="export_to_bigquery_task")
 def export_to_bigquery_task(
-    df: pl.DataFrame,
-    project_id: str,
-    dataset_id: str,
-    table_id: str
+    df: pl.DataFrame, project_id: str, dataset_id: str, table_id: str
 ) -> None:
     """
     Task para exportar datos a BigQuery
@@ -143,16 +141,15 @@ def export_to_bigquery_task(
     """
     logger = get_run_logger()
     row_count = len(df)
-    logger.info(f"☁️ Exporting {row_count} rows to BigQuery: {project_id}.{dataset_id}.{table_id}")
+    logger.info(
+        f"☁️ Exporting {row_count} rows to BigQuery: {project_id}.{dataset_id}.{table_id}"
+    )
     export_to_bigquery(project_id, dataset_id, table_id, df)
     logger.info("✅ BigQuery export completed successfully")
 
 
 @task(name="export_to_motherduck_task")
-def export_to_motherduck_task(
-    df: pl.DataFrame,
-    table_name: str
-) -> None:
+def export_to_motherduck_task(df: pl.DataFrame, table_name: str) -> None:
     """
     Task para exportar datos a MotherDuck
 
@@ -178,15 +175,21 @@ async def save_pipeline_state() -> None:
         state_manager = get_pipeline_state()
         # Guardar la hora anterior a la actual (la que acabamos de procesar)
         now = datetime.now(timezone.utc)
-        last_processed_hour = now.replace(minute=0, second=0, microsecond=0, hour=now.hour - 1)
+        last_processed_hour = now.replace(
+            minute=0, second=0, microsecond=0, hour=now.hour - 1
+        )
 
         await state_manager.set_last_processed_hour(last_processed_hour)
         # Update metadata with execution info
         await state_manager.update_metadata("last_execution", now.isoformat())
-        await state_manager.update_metadata("pipeline_version", get_settings().PIPELINE_VERSION)
+        await state_manager.update_metadata(
+            "pipeline_version", get_settings().PIPELINE_VERSION
+        )
 
         logger.info(f"💾 State saved: last processed hour = {last_processed_hour}")
-        logger.info(f"🔄 Prefect Block '{state_manager.block_name}' updated successfully")
+        logger.info(
+            f"🔄 Prefect Block '{state_manager.block_name}' updated successfully"
+        )
     except Exception as e:
         logger.error(f"❌ Failed to save pipeline state: {e}")
         raise
@@ -198,7 +201,7 @@ async def save_pipeline_state() -> None:
 async def pipeline_horario(
     pollutants: List[str] | None = None,
     export_excel: bool = False,
-    export_bigquery: bool = True,
+    export_bigquery: bool = False,
     export_motherduck: bool = True,
     incremental: bool = True,
     state_block_name: str = "pipeline-state",
@@ -229,8 +232,12 @@ async def pipeline_horario(
     # Use provided pollutants or default from config
     pollutants_to_process = pollutants or POLLUTANTS_TO_PROCESS
 
-    logger.info(f"🚀 Starting pipeline execution for {len(pollutants_to_process)} pollutants")
-    logger.info(f"📋 Configuration: version={settings.PIPELINE_VERSION}, incremental={incremental}, block='{state_block_name}'")
+    logger.info(
+        f"🚀 Starting pipeline execution for {len(pollutants_to_process)} pollutants"
+    )
+    logger.info(
+        f"📋 Configuration: version={settings.PIPELINE_VERSION}, incremental={incremental}, block='{state_block_name}'"
+    )
 
     # Get pipeline state for incremental processing
     state_manager = get_pipeline_state(state_block_name)
@@ -244,7 +251,9 @@ async def pipeline_horario(
 
     try:
         # Fetch all data in parallel
-        logger.info(f"📥 Fetching data for {len(pollutants_to_process)} pollutants from InfluxDB")
+        logger.info(
+            f"📥 Fetching data for {len(pollutants_to_process)} pollutants from InfluxDB"
+        )
         fetch_tasks = [
             fetch_pollutant_data(pollutant, last_processed_hour)
             for pollutant in pollutants_to_process
@@ -255,9 +264,7 @@ async def pipeline_horario(
         logger.info("🔄 Transforming data to long format")
         transform_tasks = [
             transform_pollutant_data(
-                pollutant=pollutant,
-                df=df,
-                pipeline_version=settings.PIPELINE_VERSION
+                pollutant=pollutant, df=df, pipeline_version=settings.PIPELINE_VERSION
             )
             for pollutant, df in zip(pollutants_to_process, dataframes)
         ]
@@ -265,7 +272,14 @@ async def pipeline_horario(
 
         # Standardize DataFrames: ensure all have same columns and filter out empty ones
         standardized_dataframes = []
-        expected_columns = ["time", "location", "metrica", "valor", "count_ok", "version"]
+        expected_columns = [
+            "time",
+            "location",
+            "metrica",
+            "valor",
+            "count_ok",
+            "version",
+        ]
 
         for df in transformed_dataframes:
             # Skip empty DataFrames
@@ -276,7 +290,11 @@ async def pipeline_horario(
             for col in expected_columns:
                 if col not in df.columns:
                     if col in ["valor", "count_ok"]:
-                        df = df.with_columns(pl.lit(None, dtype=pl.Float64 if col == "valor" else pl.UInt32).alias(col))
+                        df = df.with_columns(
+                            pl.lit(
+                                None, dtype=pl.Float64 if col == "valor" else pl.UInt32
+                            ).alias(col)
+                        )
                     else:
                         df = df.with_columns(pl.lit(None, dtype=pl.Utf8).alias(col))
 
@@ -284,25 +302,29 @@ async def pipeline_horario(
             df = df.select(expected_columns)
             if "time" in df.columns:
                 df = df.with_columns(
-                    pl.col("time").cast(pl.Datetime('us', 'UTC')).alias("time")
+                    pl.col("time").cast(pl.Datetime("us", "UTC")).alias("time")
                 )
 
             standardized_dataframes.append(df)
 
         # If no data at all, create empty DataFrame with correct schema
         if not standardized_dataframes:
-            contaminantes_horarios = pl.DataFrame({
-                "time": pl.Series(dtype=pl.Datetime('us', 'UTC')),
-                "location": pl.Series(dtype=pl.Utf8),
-                "metrica": pl.Series(dtype=pl.Utf8),
-                "valor": pl.Series(dtype=pl.Float64),
-                "count_ok": pl.Series(dtype=pl.UInt32),
-                "version": pl.Series(dtype=pl.Utf8)
-            })
+            contaminantes_horarios = pl.DataFrame(
+                {
+                    "time": pl.Series(dtype=pl.Datetime("us", "UTC")),
+                    "location": pl.Series(dtype=pl.Utf8),
+                    "metrica": pl.Series(dtype=pl.Utf8),
+                    "valor": pl.Series(dtype=pl.Float64),
+                    "count_ok": pl.Series(dtype=pl.UInt32),
+                    "version": pl.Series(dtype=pl.Utf8),
+                }
+            )
         else:
             # Concatenate all transformed dataframes
             contaminantes_horarios = pl.concat(standardized_dataframes)
-        logger.info(f"📊 Data processing complete: {len(contaminantes_horarios)} total rows")
+        logger.info(
+            f"📊 Data processing complete: {len(contaminantes_horarios)} total rows"
+        )
 
         # Export to configured destinations
         logger.info("💾 Exporting data to configured destinations")
@@ -317,13 +339,17 @@ async def pipeline_horario(
 
         # BigQuery export (concurrent via .submit())
         if export_bigquery:
-            if settings.GOOGLE_PROJECT_ID and settings.BIGQUERY_DATASET_ID and settings.BIGQUERY_TABLE_ID:
+            if (
+                settings.GOOGLE_PROJECT_ID
+                and settings.BIGQUERY_DATASET_ID
+                and settings.BIGQUERY_TABLE_ID
+            ):
                 export_futures.append(
                     export_to_bigquery_task.submit(
                         contaminantes_horarios,
                         settings.GOOGLE_PROJECT_ID,
                         settings.BIGQUERY_DATASET_ID,
-                        settings.BIGQUERY_TABLE_ID
+                        settings.BIGQUERY_TABLE_ID,
                     )
                 )
             else:
@@ -342,10 +368,12 @@ async def pipeline_horario(
 
         # Wait for all concurrent export tasks to complete
         if export_futures:
-            logger.info(f"🚀 Submitted {len(export_futures)} export tasks for concurrent execution")
+            logger.info(
+                f"🚀 Submitted {len(export_futures)} export tasks for concurrent execution"
+            )
             wait(export_futures)  # Wait for all futures to complete
             logger.info("✅ All export tasks completed successfully")
-        
+
         # Save pipeline state (only if incremental and successful)
         if incremental:
             save_pipeline_state()
@@ -365,4 +393,3 @@ async def pipeline_horario(
 if __name__ == "__main__":
     # For local testing
     asyncio.run(pipeline_horario())
-
