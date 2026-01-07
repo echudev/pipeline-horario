@@ -1,0 +1,46 @@
+# Welcome to your prefect.yaml file! You can use this file for storing and managing
+# configuration for deploying your flows. We recommend committing this file to source
+# control along with your flow code.
+
+# Generic metadata about this project
+name: pipeline-horario
+prefect-version: 3.0.0
+
+# build section allows you to manage and build docker image
+build:
+  - prefect_docker.deployments.steps.build_docker_image:
+      requires: prefect-docker>=0.3.1
+      image_name: pipeline-horario
+      tag: latest
+      dockerfile: Dockerfile
+
+# push section allows you to manage if and how this project is uploaded to remote locations
+push:
+  - prefect_docker.deployments.steps.push_docker_image:
+      requires: prefect-docker>=0.3.1
+      image_name: "{{ build_image.image_name }}"
+      tag: "{{ build_image.tag }}"
+
+# pull section allows you to provide instructions for cloning this project in remote locations
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /opt/prefect/pipeline-horario
+  # Install dependencies from pyproject.toml (for Prefect Cloud Serverless)
+  # Using pip install -e . to install from pyproject.toml
+  - prefect.deployments.steps.run_shell_script:
+      id: install_dependencies
+      script: pip install -e .
+      stream_output: true
+
+# the deployments section allows you to provide configuration for deploying flows
+deployments:
+  - name: pipeline-horario-deployment
+    entrypoint: flows/pipeline_horario.py:pipeline_horario
+    work_pool:
+      name: default
+    schedule: null
+    parameters:
+      pollutants: null
+      export_excel: true
+      export_bigquery: false
+      export_motherduck: false

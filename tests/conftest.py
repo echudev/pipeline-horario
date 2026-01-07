@@ -4,10 +4,10 @@ Pytest configuration and shared fixtures
 import pytest
 import polars as pl
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from config.settings import Settings
-from src.extract import db_extractor
+from src.utils.clients import close_influxdb_client
 
 
 @pytest.fixture
@@ -44,6 +44,10 @@ def mock_settings():
     settings.BIGQUERY_TABLE_ID = "test-table"
     settings.PIPELINE_VERSION = "test-v1.0"
     settings.LOG_LEVEL = "INFO"
+    settings.OUTPUT_DIR = "output"
+    settings.OUTPUT_FILENAME = "test_output.xlsx"
+    settings.MOTHERDUCK_DATABASE = "test-db"
+    settings.MOTHERDUCK_TOKEN = "test-token"
     return settings
 
 
@@ -67,4 +71,12 @@ def cleanup_influxdb_client():
     """Automatically clean up InfluxDB client after each test"""
     yield
     # Clean up after each test
-    db_extractor.close_influxdb_client()
+    close_influxdb_client()
+
+
+@pytest.fixture
+def mock_prefect_secret_block():
+    """Mock Prefect Secret block for testing"""
+    with patch('config.settings._load_secret_from_block') as mock_load:
+        mock_load.return_value = None
+        yield mock_load

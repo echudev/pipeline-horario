@@ -173,3 +173,4 @@ def validate_data_quality_score(df: pl.DataFrame) -> float:
 
     logger.info(f"Data quality score: {quality_score:.2f}")
     return quality_score
+

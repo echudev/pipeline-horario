@@ -1,0 +1,6 @@
+# Prefect configuration file
+# This file contains global settings for Prefect in this project
+
+[logging]
+level = "INFO"
+
