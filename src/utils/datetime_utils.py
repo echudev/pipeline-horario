@@ -5,18 +5,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 
-def ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
+def ensure_utc(dt: Optional[datetime | str]) -> Optional[datetime]:
     """
     Ensure datetime is timezone-aware with UTC timezone.
     
     Args:
-        dt: Datetime to convert (can be None or naive/aware)
+        dt: Datetime to convert (can be None, naive/aware datetime, or ISO string)
     
     Returns:
         UTC-aware datetime or None if input is None
     """
     if dt is None:
         return None
+    if isinstance(dt, str):
+        dt = datetime.fromisoformat(dt)
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
