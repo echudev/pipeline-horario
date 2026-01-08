@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from prefect.blocks.abstract import Block
 
+from .datetime_utils import ensure_utc, add_hours, get_previous_hour_start
+
 
 class PipelineStateBlock(Block):
     """
@@ -14,12 +16,10 @@ class PipelineStateBlock(Block):
     for incremental data processing.
     """
 
-    # Block metadata
     _block_type_name = "Pipeline State Block"
     _block_type_slug = "pipeline-state-block"
     _description = "Manages incremental pipeline state for data processing flows"
 
-    # Block fields
     last_processed_hour: Optional[datetime] = None
     pipeline_version: str = "v1.0.0"
     metadata: Dict[str, Any] = {}
@@ -32,7 +32,7 @@ class PipelineStateBlock(Block):
         **kwargs
     ):
         super().__init__(**kwargs)
-        self.last_processed_hour = last_processed_hour
+        self.last_processed_hour = ensure_utc(last_processed_hour)
         self.pipeline_version = pipeline_version
         self.metadata = metadata or {}
 
@@ -41,12 +41,9 @@ class PipelineStateBlock(Block):
         Get the last processed hour from the block state.
 
         Returns:
-            datetime: Last processed hour, or None if no state exists
+            datetime: Last processed hour (UTC), or None if no state exists
         """
-        if self.last_processed_hour and self.last_processed_hour.tzinfo is None:
-            # Ensure timezone awareness
-            self.last_processed_hour = self.last_processed_hour.replace(tzinfo=timezone.utc)
-        return self.last_processed_hour
+        return ensure_utc(self.last_processed_hour)
 
     def set_last_processed_hour(self, hour: datetime) -> None:
         """
@@ -54,12 +51,20 @@ class PipelineStateBlock(Block):
 
         Args:
             hour: The hour that was successfully processed
+        
+        Raises:
+            ValueError: If block document name is not set
         """
-        if hour.tzinfo is None:
-            hour = hour.replace(tzinfo=timezone.utc)
+        self.last_processed_hour = ensure_utc(hour)
+        self._save_block()
 
-        self.last_processed_hour = hour
-        # Save the block state immediately
+    def _save_block(self) -> None:
+        """Save block state to Prefect Cloud/Server."""
+        if not hasattr(self, '_block_document_name') or not self._block_document_name:
+            raise ValueError(
+                "Block must be loaded from Prefect before saving. "
+                "Use PipelineStateBlock.load('block-name') first."
+            )
         self.save(name=self._block_document_name, overwrite=True)
 
     def get_next_hour_to_process(self) -> datetime:
@@ -67,24 +72,20 @@ class PipelineStateBlock(Block):
         Get the next hour that should be processed.
 
         Returns:
-            datetime: Next hour to process (last processed + 1 hour, or current hour - 1 if no state)
+            datetime: Next hour to process (last processed + 1 hour, 
+                     or previous hour if no state)
         """
         last_processed = self.get_last_processed_hour()
 
         if last_processed is None:
-            # If no state exists, process the previous hour
-            now = datetime.now(timezone.utc)
-            # Round down to the start of the current hour, then go back 1 hour
-            current_hour = now.replace(minute=0, second=0, microsecond=0)
-            return current_hour.replace(hour=current_hour.hour - 1)
-        else:
-            # Process the next hour after the last processed
-            return last_processed.replace(hour=last_processed.hour + 1)
+            return get_previous_hour_start()
+        
+        return add_hours(last_processed, 1)
 
     def reset_state(self) -> None:
-        """Reset the pipeline state (useful for full reprocessing)"""
+        """Reset the pipeline state (useful for full reprocessing)."""
         self.last_processed_hour = None
-        self.save(name=self._block_document_name, overwrite=True)
+        self._save_block()
 
     def update_metadata(self, key: str, value: Any) -> None:
         """
@@ -95,7 +96,7 @@ class PipelineStateBlock(Block):
             value: Metadata value
         """
         self.metadata[key] = value
-        self.save(name=self._block_document_name, overwrite=True)
+        self._save_block()
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """
@@ -112,5 +113,4 @@ class PipelineStateBlock(Block):
 
     def __repr__(self) -> str:
         last_processed = self.get_last_processed_hour()
-        next_to_process = self.get_next_hour_to_process()
-        return f"PipelineStateBlock(last_processed={last_processed}, next_to_process={next_to_process})"
+        return f"PipelineStateBlock(last_processed={last_processed})"

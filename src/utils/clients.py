@@ -1,79 +1,75 @@
 """
-Client management for InfluxDB, BigQuery, and MotherDuck
+Client management for InfluxDB, BigQuery, and MotherDuck.
+
+Uses context managers for proper resource cleanup and dependency injection pattern.
 """
-from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Optional
+from contextlib import asynccontextmanager, contextmanager
+from datetime import datetime
+from typing import Optional, List, Tuple, AsyncIterator, Iterator
+import logging
+
 from influxdb_client_3 import InfluxDBClient3
 from google.cloud import bigquery
 import duckdb
+import polars as pl
 
 from config.settings import get_settings
 from config.pollutants import TABLE_CONFIG
+from .datetime_utils import ensure_utc, add_hours, get_previous_hour_start, iter_hours
+
+logger = logging.getLogger(__name__)
 
 
-# Global client instances (lazy initialization)
-_influxdb_client: Optional[InfluxDBClient3] = None
-_bigquery_client: Optional[bigquery.Client] = None
-_motherduck_client: Optional[duckdb.DuckDBPyConnection] = None
+class ClientError(Exception):
+    """Exception raised when client operations fail."""
+    pass
 
+
+# =============================================================================
+# InfluxDB Client
+# =============================================================================
 
 def create_influxdb_client() -> InfluxDBClient3:
     """
-    Create and return an InfluxDB client instance using settings from config.
+    Create a new InfluxDB client instance.
     
     Returns:
         InfluxDBClient3: Configured InfluxDB client
+    
+    Raises:
+        ClientError: If client cannot be created
     """
-    settings = get_settings()
-    return InfluxDBClient3(
-        host=settings.INFLUXDB_HOST,
-        token=settings.INFLUXDB_TOKEN,
-        database=settings.INFLUXDB_DATABASE
-    )
+    try:
+        settings = get_settings()
+        return InfluxDBClient3(
+            host=settings.INFLUXDB_HOST,
+            token=settings.INFLUXDB_TOKEN,
+            database=settings.INFLUXDB_DATABASE
+        )
+    except Exception as e:
+        raise ClientError(f"Failed to create InfluxDB client: {e}") from e
 
 
-def get_influxdb_client() -> InfluxDBClient3:
+@asynccontextmanager
+async def influxdb_client() -> AsyncIterator[InfluxDBClient3]:
     """
-    Get or create the global InfluxDB client instance.
-
-    Returns:
-        InfluxDBClient3: The global client instance
-    """
-    global _influxdb_client
-    if _influxdb_client is None:
-        _influxdb_client = create_influxdb_client()
-    return _influxdb_client
-
-
-def close_influxdb_client() -> None:
-    """
-    Close the global InfluxDB client instance and reset it to None.
-    """
-    global _influxdb_client
-    if _influxdb_client is not None:
-        try:
-            _influxdb_client.close()
-        except Exception:
-            # Ignore errors during cleanup
-            pass
-        _influxdb_client = None
-
-
-@contextmanager
-def InfluxDBClientManager():
-    """
-    Context manager for InfluxDB client that ensures cleanup.
+    Async context manager for InfluxDB client with automatic cleanup.
     
     Usage:
-        with InfluxDBClientManager() as client:
-            # use client
+        async with influxdb_client() as client:
+            df = await fetch_data(client, 'co')
+    
+    Yields:
+        InfluxDBClient3: Configured client instance
     """
-    client = get_influxdb_client()
+    client = create_influxdb_client()
     try:
         yield client
     finally:
-        close_influxdb_client()
+        try:
+            client.close()
+        except Exception as e:
+            logger.warning(f"Error closing InfluxDB client: {e}")
 
 
 async def fetch_data(
@@ -81,30 +77,34 @@ async def fetch_data(
     data_type: str,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None
-):
+) -> pl.DataFrame:
     """
-    Fetch data asynchronously based on data type
+    Fetch data from InfluxDB based on data type.
 
     Args:
         client: InfluxDB client instance
-        data_type: Type of data to fetch (e.g., 'co', 'nox', 'pm10', 'so2', 'o3', 'meteo')
-        start_time: Start time for data range. If None, uses previous hour
-        end_time: End time for data range. If None, uses current hour
+        data_type: Type of data to fetch (e.g., 'co', 'nox', 'pm10')
+        start_time: Start time for data range (UTC)
+        end_time: End time for data range (UTC)
 
     Returns:
         pl.DataFrame: DataFrame containing the fetched data
 
     Raises:
         KeyError: If data_type is not in TABLE_CONFIG
+        ClientError: If query fails
     """
     if data_type not in TABLE_CONFIG:
-        raise KeyError(f"Unknown data type: {data_type}. Available types: {list(TABLE_CONFIG.keys())}")
+        raise KeyError(
+            f"Unknown data type: {data_type}. "
+            f"Available types: {list(TABLE_CONFIG.keys())}"
+        )
 
     config = TABLE_CONFIG[data_type]
     table_name = config['table']
     metrics = config['metrics']
 
-    # Handle special case for meteo (all columns)
+    # Build column selection
     if metrics == ['*']:
         columns_str = '*'
     else:
@@ -113,64 +113,79 @@ async def fetch_data(
         columns_str = ', '.join(all_columns)
 
     # Build time filter
-    if start_time is None and end_time is None:
-        # Legacy behavior: previous hour
-        time_filter = "time >= date_trunc('hour', now()) - INTERVAL '1 hour' AND time < date_trunc('hour', now())"
-    else:
-        # Ensure timezone awareness
-        if start_time and start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
-        if end_time and end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=timezone.utc)
-
-        start_iso = start_time.isoformat() if start_time else "1970-01-01T00:00:00Z"
-        end_iso = end_time.isoformat() if end_time else "now()"
-
-        time_filter = f"time >= '{start_iso}' AND time < '{end_iso}'"
+    time_filter = _build_time_filter(start_time, end_time)
 
     query = f"""
-            SELECT {columns_str}
-            FROM {table_name}
-            WHERE {time_filter}
-            ORDER BY time ASC
-            """
-
-    return await client.query_async(query=query, mode="polars")
-
-
-async def fetch_incremental_data(client: InfluxDBClient3, data_type: str, last_processed_hour: Optional[datetime] = None):
+        SELECT {columns_str}
+        FROM {table_name}
+        WHERE {time_filter}
+        ORDER BY time ASC
     """
-    Fetch data incrementally from the last processed hour
+
+    try:
+        return await client.query_async(query=query, mode="polars")
+    except Exception as e:
+        raise ClientError(f"Failed to fetch {data_type} data: {e}") from e
+
+
+def _build_time_filter(
+    start_time: Optional[datetime], 
+    end_time: Optional[datetime]
+) -> str:
+    """Build SQL time filter clause."""
+    if start_time is None and end_time is None:
+        # Default: previous hour
+        return (
+            "time >= date_trunc('hour', now()) - INTERVAL '1 hour' "
+            "AND time < date_trunc('hour', now())"
+        )
+    
+    start_time = ensure_utc(start_time)
+    end_time = ensure_utc(end_time)
+    
+    start_iso = start_time.isoformat() if start_time else "1970-01-01T00:00:00Z"
+    end_iso = end_time.isoformat() if end_time else "now()"
+    
+    return f"time >= '{start_iso}' AND time < '{end_iso}'"
+
+
+async def fetch_incremental_data(
+    client: InfluxDBClient3, 
+    data_type: str, 
+    last_processed_hour: Optional[datetime] = None
+) -> pl.DataFrame:
+    """
+    Fetch data incrementally from the last processed hour.
 
     Args:
         client: InfluxDB client instance
-        data_type: Type of data to fetch (e.g., 'co', 'nox', 'pm10', 'so2', 'o3', 'meteo')
-        last_processed_hour: Last hour that was successfully processed. If None, fetches previous hour
+        data_type: Type of data to fetch
+        last_processed_hour: Last hour that was successfully processed
 
     Returns:
-        pl.DataFrame: DataFrame containing the fetched data
+        pl.DataFrame: DataFrame containing the fetched data (may be empty)
     """
     if last_processed_hour is None:
-        # First run or no state: fetch previous hour
         return await fetch_data(client, data_type)
-    else:
-        # Incremental: fetch from last_processed_hour + 1 hour to current hour - 1 hour
-        start_time = last_processed_hour.replace(hour=last_processed_hour.hour + 1)
-        now = datetime.now(timezone.utc)
-        current_hour_start = now.replace(minute=0, second=0, microsecond=0)
-        end_time = current_hour_start  # Up to but not including current hour
-
-        if start_time >= end_time:
-            # No new data to fetch
-            import polars as pl
-            return pl.DataFrame()
-
-        return await fetch_data(client, data_type, start_time, end_time)
+    
+    start_time = add_hours(ensure_utc(last_processed_hour), 1)
+    end_time = get_previous_hour_start()
+    
+    # Check if there's new data to fetch
+    if start_time >= end_time:
+        logger.info(f"No new data for {data_type}: start={start_time} >= end={end_time}")
+        return pl.DataFrame()
+    
+    return await fetch_data(client, data_type, start_time, end_time)
 
 
-async def fetch_specific_hour(client: InfluxDBClient3, data_type: str, target_hour: datetime):
+async def fetch_specific_hour(
+    client: InfluxDBClient3, 
+    data_type: str, 
+    target_hour: datetime
+) -> pl.DataFrame:
     """
-    Fetch data for a specific hour (used for backfilling)
+    Fetch data for a specific hour (used for backfilling).
 
     Args:
         client: InfluxDB client instance
@@ -180,73 +195,21 @@ async def fetch_specific_hour(client: InfluxDBClient3, data_type: str, target_ho
     Returns:
         pl.DataFrame: DataFrame containing data for the specific hour
     """
-    # Ensure timezone awareness
-    if target_hour.tzinfo is None:
-        target_hour = target_hour.replace(tzinfo=timezone.utc)
-
+    target_hour = ensure_utc(target_hour)
     start_time = target_hour
-    end_time = target_hour.replace(hour=target_hour.hour + 1)
-
+    end_time = add_hours(target_hour, 1)
+    
     return await fetch_data(client, data_type, start_time, end_time)
 
 
-def create_bigquery_client() -> bigquery.Client:
-    """
-    Create and return a BigQuery client instance using settings from config.
-    
-    Returns:
-        bigquery.Client: Configured BigQuery client
-    """
-    settings = get_settings()
-    return bigquery.Client(project=settings.GOOGLE_PROJECT_ID)
-
-
-def get_bigquery_client() -> bigquery.Client:
-    """
-    Get or create the global BigQuery client instance.
-    
-    Returns:
-        bigquery.Client: The global client instance of BigQuery
-    """
-    global _bigquery_client
-    if _bigquery_client is None:
-        _bigquery_client = create_bigquery_client()
-    return _bigquery_client
-
-
-def create_motherduck_client() -> duckdb.DuckDBPyConnection:
-    """
-    Create and return a MotherDuck client instance using settings from config.
-    
-    Returns:
-        DuckDBPyConnection: Configured MotherDuck client
-    """
-    settings = get_settings()
-    return duckdb.connect(f'md:{settings.MOTHERDUCK_DATABASE}?motherduck_token={settings.MOTHERDUCK_TOKEN}')
-
-
-def get_motherduck_client() -> duckdb.DuckDBPyConnection:
-    """
-    Get or create the global MotherDuck client instance.
-
-    Returns:
-        DuckDBPyConnection: The global client instance of MotherDuck
-    """
-    global _motherduck_client
-    if _motherduck_client is None:
-        _motherduck_client = create_motherduck_client()
-    return _motherduck_client
-
-
-# Backfilling functions
-async def backfill_missing_hours(
+async def backfill_hours(
     client: InfluxDBClient3,
     data_type: str,
     start_hour: datetime,
     end_hour: datetime
-) -> list:
+) -> List[Tuple[datetime, pl.DataFrame]]:
     """
-    Backfill data for missing hours between start_hour and end_hour
+    Backfill data for hours between start_hour and end_hour.
 
     Args:
         client: InfluxDB client instance
@@ -255,34 +218,29 @@ async def backfill_missing_hours(
         end_hour: Last hour to backfill (exclusive)
 
     Returns:
-        List of tuples: [(hour, dataframe), ...] for each successfully fetched hour
+        List of tuples: [(hour, dataframe), ...] for each hour with data
     """
     results = []
-
-    # Ensure timezone awareness
-    if start_hour.tzinfo is None:
-        start_hour = start_hour.replace(tzinfo=timezone.utc)
-    if end_hour.tzinfo is None:
-        end_hour = end_hour.replace(tzinfo=timezone.utc)
-
-    current_hour = start_hour
-    while current_hour < end_hour:
+    
+    for hour in iter_hours(start_hour, end_hour):
         try:
-            df = await fetch_specific_hour(client, data_type, current_hour)
-            if len(df) > 0:  # Only include hours with data
-                results.append((current_hour, df))
+            df = await fetch_specific_hour(client, data_type, hour)
+            if len(df) > 0:
+                results.append((hour, df))
+                logger.debug(f"Backfilled {data_type} at {hour}: {len(df)} rows")
         except Exception as e:
-            print(f"Warning: Failed to fetch data for {data_type} at {current_hour}: {e}")
-            # Continue with next hour
-
-        current_hour = current_hour.replace(hour=current_hour.hour + 1)
-
+            logger.warning(f"Failed to fetch {data_type} at {hour}: {e}")
+            continue
+    
     return results
 
 
-def find_missing_hours(last_processed_hour: datetime, current_time: datetime) -> list:
+def find_missing_hours(
+    last_processed_hour: datetime, 
+    current_time: datetime
+) -> List[datetime]:
     """
-    Find hours that are missing between last processed and current time
+    Find hours that are missing between last processed and current time.
 
     Args:
         last_processed_hour: Last hour that was successfully processed
@@ -291,18 +249,109 @@ def find_missing_hours(last_processed_hour: datetime, current_time: datetime) ->
     Returns:
         List of datetime objects representing missing hours
     """
-    if last_processed_hour.tzinfo is None:
-        last_processed_hour = last_processed_hour.replace(tzinfo=timezone.utc)
-    if current_time.tzinfo is None:
-        current_time = current_time.replace(tzinfo=timezone.utc)
+    start = add_hours(ensure_utc(last_processed_hour), 1)
+    end = ensure_utc(current_time).replace(minute=0, second=0, microsecond=0)
+    
+    return list(iter_hours(start, end))
 
-    missing_hours = []
-    current_hour = last_processed_hour.replace(hour=last_processed_hour.hour + 1)
-    current_hour_start = current_time.replace(minute=0, second=0, microsecond=0)
 
-    while current_hour < current_hour_start:
-        missing_hours.append(current_hour)
-        current_hour = current_hour.replace(hour=current_hour.hour + 1)
+# =============================================================================
+# BigQuery Client
+# =============================================================================
 
-    return missing_hours
+@contextmanager
+def bigquery_client() -> Iterator[bigquery.Client]:
+    """
+    Context manager for BigQuery client.
+    
+    Yields:
+        bigquery.Client: Configured BigQuery client
+    """
+    settings = get_settings()
+    client = bigquery.Client(project=settings.GOOGLE_PROJECT_ID)
+    try:
+        yield client
+    finally:
+        client.close()
 
+
+# =============================================================================
+# MotherDuck Client
+# =============================================================================
+
+@contextmanager
+def motherduck_client() -> Iterator[duckdb.DuckDBPyConnection]:
+    """
+    Context manager for MotherDuck client.
+    
+    Yields:
+        DuckDBPyConnection: Configured MotherDuck connection
+    """
+    settings = get_settings()
+    conn = duckdb.connect(
+        f'md:{settings.MOTHERDUCK_DATABASE}?motherduck_token={settings.MOTHERDUCK_TOKEN}'
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+# =============================================================================
+# Legacy compatibility (deprecated - use context managers instead)
+# =============================================================================
+
+_influxdb_client: Optional[InfluxDBClient3] = None
+
+
+def get_influxdb_client() -> InfluxDBClient3:
+    """
+    Get or create global InfluxDB client instance.
+    
+    DEPRECATED: Use `async with influxdb_client()` context manager instead.
+    """
+    global _influxdb_client
+    if _influxdb_client is None:
+        _influxdb_client = create_influxdb_client()
+    return _influxdb_client
+
+
+def close_influxdb_client() -> None:
+    """
+    Close the global InfluxDB client instance.
+    
+    DEPRECATED: Use `async with influxdb_client()` context manager instead.
+    """
+    global _influxdb_client
+    if _influxdb_client is not None:
+        try:
+            _influxdb_client.close()
+        except Exception as e:
+            logger.warning(f"Error closing InfluxDB client: {e}")
+        _influxdb_client = None
+
+
+def get_bigquery_client() -> bigquery.Client:
+    """
+    Create BigQuery client.
+    
+    DEPRECATED: Use `with bigquery_client()` context manager instead.
+    """
+    settings = get_settings()
+    return bigquery.Client(project=settings.GOOGLE_PROJECT_ID)
+
+
+def get_motherduck_client() -> duckdb.DuckDBPyConnection:
+    """
+    Create MotherDuck client.
+    
+    DEPRECATED: Use `with motherduck_client()` context manager instead.
+    """
+    settings = get_settings()
+    return duckdb.connect(
+        f'md:{settings.MOTHERDUCK_DATABASE}?motherduck_token={settings.MOTHERDUCK_TOKEN}'
+    )
+
+
+# Legacy alias
+InfluxDBClientManager = influxdb_client

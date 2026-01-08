@@ -1,210 +1,217 @@
 """
-Exporters for pipeline output
+Exporters for pipeline output to various destinations.
 """
 import logging
-import polars as pl
+import os
 from pathlib import Path
+from typing import Optional
+
+import polars as pl
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 import duckdb
 
 from config.settings import get_settings
-
-# Prefect GCP integration
-try:
-    from prefect_gcp import GcpCredentials
-    PREFECT_GCP_AVAILABLE = True
-except ImportError:
-    PREFECT_GCP_AVAILABLE = False
-    logging.warning("prefect-gcp not available, falling back to standard BigQuery client")
+from .schema import OUTPUT_COLUMNS, get_bigquery_schema
 
 logger = logging.getLogger(__name__)
 
 
+class ExportError(Exception):
+    """Exception raised when export operations fail."""
+    pass
+
+
+# =============================================================================
+# Excel Export
+# =============================================================================
+
 def export_to_excel(df: pl.DataFrame, output_path: str) -> None:
     """
-    Export DataFrame to Excel file
+    Export DataFrame to Excel file.
 
     Args:
         df: DataFrame to export
-        output_path: Full path to output file (including directory and filename)
+        output_path: Full path to output file
 
     Raises:
-        OSError: If the output directory cannot be created
-        Exception: If the export fails
+        ExportError: If export fails
     """
-    # Create output directory if it doesn't exist
+    if df.is_empty():
+        logger.warning("DataFrame is empty, skipping Excel export")
+        return
+
     output_dir = Path(output_path).parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Exporting {len(df)} rows to {output_path}")
 
     try:
-        # Excel doesn't support timezones, so we need to remove them
+        # Excel doesn't support timezones, convert to naive datetime
         df_for_excel = df.clone()
         for col in df_for_excel.columns:
             if df_for_excel[col].dtype == pl.Datetime('us', 'UTC'):
-                # Convert timezone-aware datetime to naive datetime
                 df_for_excel = df_for_excel.with_columns(
                     pl.col(col).dt.replace_time_zone(None).alias(col)
                 )
 
         df_for_excel.write_excel(output_path)
-        logger.info(f"Successfully exported data to {output_path}")
+        logger.info(f"Successfully exported to {output_path}")
     except Exception as e:
-        logger.error(f"Failed to export data to {output_path}: {e}")
-        raise
+        raise ExportError(f"Failed to export to Excel: {e}") from e
+
+
+# =============================================================================
+# BigQuery Export
+# =============================================================================
+
+def _get_bigquery_client(project_id: str) -> bigquery.Client:
+    """
+    Get BigQuery client with proper credential handling.
+    
+    Tries in order:
+    1. Prefect GCP credentials block
+    2. Service account key file
+    3. Default credentials
+    """
+    # Try Prefect GCP credentials
+    try:
+        from prefect_gcp import GcpCredentials
+        gcp_credentials = GcpCredentials.load("gcp-credentials")
+        logger.info("Using Prefect GCP credentials for BigQuery")
+        return gcp_credentials.get_bigquery_client()
+    except Exception as e:
+        logger.debug(f"Prefect GCP credentials not available: {e}")
+
+    # Try service account key file
+    key_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "secrets", "service-account-key.json"
+    )
+    if os.path.exists(key_path):
+        logger.info("Using service account key file for BigQuery")
+        return bigquery.Client.from_service_account_json(key_path)
+
+    # Fall back to default credentials
+    logger.info("Using default credentials for BigQuery")
+    return bigquery.Client(project=project_id)
 
 
 def export_to_bigquery(
-    project_id: str | None,
-    dataset_id: str | None,
-    table_id: str | None,
+    project_id: Optional[str],
+    dataset_id: Optional[str],
+    table_id: Optional[str],
     df: pl.DataFrame,
 ) -> None:
     """
-    Export DataFrame to BigQuery table
+    Export DataFrame to BigQuery table.
     
     Args:
-        df: Polars DataFrame to export
         project_id: BigQuery project ID
         dataset_id: BigQuery dataset ID
         table_id: BigQuery table ID
+        df: Polars DataFrame to export
     
     Raises:
-        ValueError: If required parameters are missing or DataFrame is invalid
+        ExportError: If export fails
+        ValueError: If required parameters are missing
     """
+    # Validate inputs
     if df.is_empty():
-        logger.warning("El DataFrame está vacío. No se exportarán datos a BigQuery.")
+        logger.warning("DataFrame is empty, skipping BigQuery export")
         return
-    if not all(col in df.columns for col in ["time", "location", "metrica", "valor", "count_ok"]):
-        raise ValueError("El DataFrame debe contener las columnas: time, location, metrica, valor, count_ok")
-    if not project_id or not dataset_id or not table_id:
-        raise ValueError("project_id, dataset_id y table_id son obligatorios para exportar a BigQuery.")
     
-    TABLE_FULL_ID = f"{project_id}.{dataset_id}.{table_id}"
+    if not all([project_id, dataset_id, table_id]):
+        raise ValueError("project_id, dataset_id, and table_id are required")
+    
+    # Validate schema
+    missing_cols = [col for col in OUTPUT_COLUMNS if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"DataFrame missing required columns: {missing_cols}")
 
-    # Inicializar el cliente de BigQuery usando Prefect GCP o service account key
+    table_full_id = f"{project_id}.{dataset_id}.{table_id}"
+    
     try:
-        if PREFECT_GCP_AVAILABLE:
-            # Usar GcpCredentials de Prefect GCP
-            try:
-                gcp_credentials = GcpCredentials.load("gcp-credentials")
-                client = gcp_credentials.get_bigquery_client()
-                logger.info("Using Prefect GCP credentials for BigQuery")
-            except Exception as e:
-                logger.warning(f"Could not load Prefect GCP credentials: {e}")
-                logger.warning("Falling back to service account key file")
-                # Intentar usar el archivo de service account key
-                import os
-                key_path = os.path.join(os.path.dirname(__file__), "..", "..", "secrets", "service-account-key.json")
-                if os.path.exists(key_path):
-                    client = bigquery.Client.from_service_account_json(key_path)
-                    logger.info("Using service account key file for BigQuery")
-                else:
-                    raise Exception("Service account key file not found")
-        else:
-            # Fallback: intentar usar service account key directamente
-            import os
-            key_path = os.path.join(os.path.dirname(__file__), "..", "..", "secrets", "service-account-key.json")
-            if os.path.exists(key_path):
-                client = bigquery.Client.from_service_account_json(key_path)
-                logger.info("Using service account key file for BigQuery")
-            else:
-                # Último fallback al cliente estándar
-                client = bigquery.Client(project=project_id)
-                logger.warning("Using standard BigQuery client (may fail without credentials)")
-
-        # Test the client connection
-        try:
-            client.get_service_account_email()
-        except Exception as e:
-            logger.warning(f"Could not verify BigQuery credentials: {e}")
-            # No fallar aquí, continuar con la exportación
-
+        client = _get_bigquery_client(project_id)
     except Exception as e:
-        logger.warning(f"No se pudieron inicializar las credenciales de BigQuery: {e}")
-        logger.warning("La exportación a BigQuery será omitida. Verifica que las credenciales de Google Cloud estén configuradas correctamente.")
-        return
-    
-    # Convert Polars DataFrame to pandas DataFrame
-    # BigQuery's load_table_from_dataframe requires pandas
-    pandas_df = df.to_pandas()
-    
-    # Table schema
-    # BigQuery puede inferirlo, pero esto da más control.
-    schema = [
-        bigquery.SchemaField("time", "TIMESTAMP", mode="REQUIRED"),
-        bigquery.SchemaField("location", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("metrica", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("valor", "FLOAT64", mode="NULLABLE"),
-        bigquery.SchemaField("count_ok", "INT64", mode="REQUIRED"),
-        bigquery.SchemaField("version", "STRING", mode="NULLABLE"),
-    ]
-    
-    # Job configuration
-    # Note: Using WRITE_TRUNCATE to replace the table with new schema if needed
-    # Remove explicit schema to let BigQuery infer it from the data
-    job_config = bigquery.LoadJobConfig(
-        write_disposition="WRITE_TRUNCATE",  # Replace the table data
-        # schema=schema,  # Let BigQuery infer the schema automatically
-    )
-    
-    logger.info(f"Cargando datos en la tabla {TABLE_FULL_ID}...")
-    
-    # Cargar el DataFrame a BigQuery
-    job = client.load_table_from_dataframe(
-        pandas_df, TABLE_FULL_ID, job_config=job_config
-    )
-    
-    # Esperar a que el trabajo termine
-    job.result()
-    
-    logger.info(f"¡Éxito! Se cargaron {len(pandas_df)} filas en la tabla {TABLE_FULL_ID}.")
-    
-    # Verificar la tabla (opcional)
-    try:
-        table = client.get_table(TABLE_FULL_ID)
-        logger.info(f"La tabla {table.table_id} ahora tiene {table.num_rows} filas.")
-    except NotFound:
-        logger.warning("No se pudo verificar la tabla.")
+        raise ExportError(f"Failed to initialize BigQuery client: {e}") from e
 
+    try:
+        # Convert to pandas (required by BigQuery client)
+        pandas_df = df.to_pandas()
+        
+        job_config = bigquery.LoadJobConfig(
+            write_disposition="WRITE_TRUNCATE",
+            schema=get_bigquery_schema(),
+        )
+        
+        logger.info(f"Loading {len(pandas_df)} rows to {table_full_id}")
+        
+        job = client.load_table_from_dataframe(
+            pandas_df, table_full_id, job_config=job_config
+        )
+        job.result()  # Wait for completion
+        
+        logger.info(f"Successfully loaded data to {table_full_id}")
+        
+        # Verify
+        try:
+            table = client.get_table(table_full_id)
+            logger.info(f"Table {table.table_id} now has {table.num_rows} rows")
+        except NotFound:
+            logger.warning("Could not verify table after load")
+            
+    except Exception as e:
+        raise ExportError(f"Failed to export to BigQuery: {e}") from e
+
+
+# =============================================================================
+# MotherDuck Export
+# =============================================================================
 
 def export_to_motherduck(
-    motherduck_client: duckdb.DuckDBPyConnection,
+    connection: duckdb.DuckDBPyConnection,
     table_name: str,
     df: pl.DataFrame,
 ) -> None:
     """
-    Export DataFrame to MotherDuck table
+    Export DataFrame to MotherDuck table.
     
     Args:
-        motherduck_client: MotherDuck client connection
-        table_name: MotherDuck table name
+        connection: MotherDuck connection
+        table_name: Full table name (database.table)
         df: Polars DataFrame to export
     
     Raises:
-        Exception: If the export fails
+        ExportError: If export fails
     """
-    logger.info(f"Cargando datos en la tabla {table_name}...")
+    if df.is_empty():
+        logger.warning("DataFrame is empty, skipping MotherDuck export")
+        return
 
-    # Convertir a pandas para compatibilidad con DuckDB
-    df_pandas = df.to_pandas()
+    logger.info(f"Loading {len(df)} rows to {table_name}")
 
-    # Crear tabla si no existe
-    motherduck_client.sql(f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            time TIMESTAMP NOT NULL,
-            location VARCHAR NOT NULL,
-            metrica VARCHAR NOT NULL,
-            valor FLOAT,
-            count_ok INTEGER NOT NULL,
-            version VARCHAR
-        )
-    """)
+    try:
+        # Convert to pandas for DuckDB compatibility
+        df_pandas = df.to_pandas()
 
-    # Registrar el DataFrame como tabla temporal y hacer la inserción
-    motherduck_client.register("temp_data", df_pandas)
-    motherduck_client.sql(f"INSERT INTO {table_name} SELECT * FROM temp_data")
-    logger.info(f"Datos insertados exitosamente en {table_name}")
+        # Create table if not exists
+        connection.sql(f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                time TIMESTAMP NOT NULL,
+                location VARCHAR NOT NULL,
+                metrica VARCHAR NOT NULL,
+                valor FLOAT,
+                count_ok INTEGER NOT NULL,
+                version VARCHAR
+            )
+        """)
 
+        # Insert data
+        connection.register("temp_data", df_pandas)
+        connection.sql(f"INSERT INTO {table_name} SELECT * FROM temp_data")
+        connection.unregister("temp_data")
+        
+        logger.info(f"Successfully loaded data to {table_name}")
+        
+    except Exception as e:
+        raise ExportError(f"Failed to export to MotherDuck: {e}") from e

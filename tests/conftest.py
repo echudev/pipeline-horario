@@ -7,15 +7,12 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 from config.settings import Settings
-from src.utils.clients import close_influxdb_client
 
 
 @pytest.fixture
 def sample_pollutant_data():
     """Create sample pollutant data for testing"""
     base_time = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
-
-    # Create time series data
     times = [base_time + timedelta(minutes=i*10) for i in range(6)]
 
     return pl.DataFrame({
@@ -48,12 +45,15 @@ def mock_settings():
     settings.OUTPUT_FILENAME = "test_output.xlsx"
     settings.MOTHERDUCK_DATABASE = "test-db"
     settings.MOTHERDUCK_TOKEN = "test-token"
+    settings.output_path = "output/test_output.xlsx"
     return settings
 
 
 @pytest.fixture
 def transformed_sample_data():
-    """Create sample transformed data"""
+    """Create sample transformed data with correct schema"""
+    from src.utils.schema import OUTPUT_COLUMNS
+    
     base_time = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
 
     return pl.DataFrame({
@@ -61,17 +61,9 @@ def transformed_sample_data():
         'location': ['Centro'],
         'metrica': ['co'],
         'valor': [1.2],
-        'count_ok': [6],
-        'version_pipeline': ['test-v1.0']
-    })
-
-
-@pytest.fixture(autouse=True)
-def cleanup_influxdb_client():
-    """Automatically clean up InfluxDB client after each test"""
-    yield
-    # Clean up after each test
-    close_influxdb_client()
+        'count_ok': pl.Series([6], dtype=pl.UInt32),
+        'version': ['test-v1.0']
+    }).select(OUTPUT_COLUMNS)
 
 
 @pytest.fixture

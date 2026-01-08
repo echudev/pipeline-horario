@@ -2,6 +2,18 @@
 Utility modules for the pipeline
 """
 from .clients import (
+    # Context managers (preferred)
+    influxdb_client,
+    bigquery_client,
+    motherduck_client,
+    # Data fetching
+    fetch_data,
+    fetch_incremental_data,
+    fetch_specific_hour,
+    backfill_hours,
+    find_missing_hours,
+    ClientError,
+    # Legacy (deprecated)
     get_influxdb_client,
     close_influxdb_client,
     get_bigquery_client,
@@ -24,10 +36,42 @@ from .exporters import (
     export_to_excel,
     export_to_bigquery,
     export_to_motherduck,
+    ExportError,
+)
+from .state import (
+    PipelineState,
+    PipelineStateError,
+    get_pipeline_state,
+)
+from .datetime_utils import (
+    ensure_utc,
+    add_hours,
+    truncate_to_hour,
+    get_current_hour_start,
+    get_previous_hour_start,
+    iter_hours,
+)
+from .schema import (
+    OUTPUT_SCHEMA,
+    OUTPUT_COLUMNS,
+    REQUIRED_INPUT_COLUMNS,
+    create_empty_output_dataframe,
+    validate_output_schema,
 )
 
 __all__ = [
-    # Clients
+    # Clients - context managers
+    "influxdb_client",
+    "bigquery_client", 
+    "motherduck_client",
+    # Clients - data fetching
+    "fetch_data",
+    "fetch_incremental_data",
+    "fetch_specific_hour",
+    "backfill_hours",
+    "find_missing_hours",
+    "ClientError",
+    # Clients - legacy
     "get_influxdb_client",
     "close_influxdb_client",
     "get_bigquery_client",
@@ -47,5 +91,22 @@ __all__ = [
     "export_to_excel",
     "export_to_bigquery",
     "export_to_motherduck",
+    "ExportError",
+    # State
+    "PipelineState",
+    "PipelineStateError",
+    "get_pipeline_state",
+    # Datetime utilities
+    "ensure_utc",
+    "add_hours",
+    "truncate_to_hour",
+    "get_current_hour_start",
+    "get_previous_hour_start",
+    "iter_hours",
+    # Schema
+    "OUTPUT_SCHEMA",
+    "OUTPUT_COLUMNS",
+    "REQUIRED_INPUT_COLUMNS",
+    "create_empty_output_dataframe",
+    "validate_output_schema",
 ]
-

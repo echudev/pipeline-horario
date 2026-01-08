@@ -9,24 +9,22 @@ from src.utils.transformers import (
     build_metric_columns,
     aggregate_to_long_format
 )
+from src.utils.schema import OUTPUT_COLUMNS
 
 
 class TestBuildMetricColumns:
     """Test metric column building functions"""
 
-    def test_build_metric_columns_single_metric(self):
-        """Test building metric columns for single metric"""
+    def test_single_metric(self):
         metrics = ['co_mean']
         result = build_metric_columns(metrics)
+        
+        assert result == {'co_mean': 'co'}
 
-        expected = {'co_mean': 'co'}
-        assert result == expected
-
-    def test_build_metric_columns_multiple_metrics(self):
-        """Test building metric columns for multiple metrics"""
+    def test_multiple_metrics(self):
         metrics = ['no_mean', 'no2_mean', 'nox_mean']
         result = build_metric_columns(metrics)
-
+        
         expected = {
             'no_mean': 'no',
             'no2_mean': 'no2',
@@ -34,19 +32,15 @@ class TestBuildMetricColumns:
         }
         assert result == expected
 
-    def test_build_metric_columns_empty_list(self):
-        """Test building metric columns for empty list"""
-        metrics = []
-        result = build_metric_columns(metrics)
-
+    def test_empty_list(self):
+        result = build_metric_columns([])
         assert result == {}
 
 
 class TestAggregateToLongFormat:
     """Test data aggregation to long format"""
 
-    def test_aggregate_to_long_format_no_metric_columns_raises_error(self):
-        """Test that empty metric_columns raises ValueError"""
+    def test_no_metric_columns_raises_error(self):
         df = pl.DataFrame({
             'time': [datetime.now(timezone.utc)],
             'location': ['test'],
@@ -56,9 +50,16 @@ class TestAggregateToLongFormat:
         with pytest.raises(ValueError, match="metric_columns cannot be None or empty"):
             aggregate_to_long_format(df)
 
-    def test_aggregate_to_long_format_basic_aggregation(self):
-        """Test basic aggregation to long format"""
-        # Create test data
+    def test_empty_dataframe_returns_empty_with_schema(self):
+        df = pl.DataFrame()
+        metric_columns = {'co_mean': 'co'}
+        
+        result = aggregate_to_long_format(df, metric_columns=metric_columns)
+        
+        assert result.is_empty()
+        assert list(result.columns) == OUTPUT_COLUMNS
+
+    def test_basic_aggregation(self):
         base_time = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
         df = pl.DataFrame({
             'time': [
@@ -67,38 +68,26 @@ class TestAggregateToLongFormat:
                 base_time.replace(minute=20),
                 base_time.replace(minute=30)
             ],
-            'location': ['loc1', 'loc1', 'loc1', 'loc1'],
-            'status': ['k', 'k', 'k', 'k'],
+            'location': ['loc1'] * 4,
+            'status': ['k'] * 4,
             'co_mean': [1.0, 1.5, 2.0, 2.5]
         })
 
-        metric_columns = {'co_mean': 'co'}
-
         result = aggregate_to_long_format(
             df,
-            metric_columns=metric_columns,
+            metric_columns={'co_mean': 'co'},
             version="test-v1.0"
         )
 
-        # Check result structure
-        assert 'time' in result.columns
-        assert 'location' in result.columns
-        assert 'metrica' in result.columns
-        assert 'valor' in result.columns
-        assert 'count_ok' in result.columns
-        assert 'version_pipeline' in result.columns
+        # Check schema
+        assert list(result.columns) == OUTPUT_COLUMNS
+        
+        # Check values
+        assert result['metrica'][0] == 'co'
+        assert result['version'][0] == 'test-v1.0'
+        assert result['time'].dtype == pl.Datetime('us', 'UTC')
 
-        # Check that time is truncated to hour
-        assert result['time'].dtype == pl.Datetime
-
-        # Check metric name
-        assert (result['metrica'] == 'co').all()
-
-        # Check version
-        assert (result['version_pipeline'] == 'test-v1.0').all()
-
-    def test_aggregate_to_long_format_filters_invalid_status(self):
-        """Test that only 'k' status records are included"""
+    def test_filters_invalid_status(self):
         base_time = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
         df = pl.DataFrame({
             'time': [
@@ -106,26 +95,21 @@ class TestAggregateToLongFormat:
                 base_time.replace(minute=10),
                 base_time.replace(minute=20)
             ],
-            'location': ['loc1', 'loc1', 'loc1'],
-            'status': ['k', 'v', 'k'],  # Mixed status
+            'location': ['loc1'] * 3,
+            'status': ['k', 'v', 'k'],  # Only 2 valid
             'co_mean': [1.0, 1.5, 2.0]
         })
 
-        metric_columns = {'co_mean': 'co'}
-
         result = aggregate_to_long_format(
             df,
-            metric_columns=metric_columns,
-            version="test-v1.0"
+            metric_columns={'co_mean': 'co'},
+            version="test"
         )
 
-        # Should only include records with status 'k'
-        # Since we group by hour, we get one record with count_ok = 2
         assert result.height == 1
         assert result['count_ok'][0] == 2
 
-    def test_aggregate_to_long_format_multiple_metrics(self):
-        """Test aggregation with multiple metrics"""
+    def test_multiple_metrics(self):
         base_time = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
         df = pl.DataFrame({
             'time': [base_time, base_time.replace(minute=10)],
@@ -135,17 +119,30 @@ class TestAggregateToLongFormat:
             'no_mean': [10.0, 15.0]
         })
 
-        metric_columns = {'co_mean': 'co', 'no_mean': 'no'}
+        result = aggregate_to_long_format(
+            df,
+            metric_columns={'co_mean': 'co', 'no_mean': 'no'},
+            version="test"
+        )
+
+        assert result.height == 2
+        metrics = result['metrica'].unique().sort().to_list()
+        assert metrics == ['co', 'no']
+
+    def test_all_invalid_status_returns_empty(self):
+        base_time = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        df = pl.DataFrame({
+            'time': [base_time],
+            'location': ['loc1'],
+            'status': ['v'],  # Invalid
+            'co_mean': [1.0]
+        })
 
         result = aggregate_to_long_format(
             df,
-            metric_columns=metric_columns,
-            version="test-v1.0"
+            metric_columns={'co_mean': 'co'},
+            version="test"
         )
 
-        # Should have 2 rows (one per metric)
-        assert result.height == 2
-
-        # Check both metrics are present
-        metrics = result['metrica'].unique().sort()
-        assert metrics.to_list() == ['co', 'no']
+        assert result.is_empty()
+        assert list(result.columns) == OUTPUT_COLUMNS

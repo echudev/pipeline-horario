@@ -4,16 +4,18 @@ Transformers for pollutant data processing
 import polars as pl
 from typing import Dict, List, Optional
 
+from .schema import OUTPUT_SCHEMA, OUTPUT_COLUMNS, create_empty_output_dataframe
+
 
 def build_metric_columns(metrics: List[str]) -> Dict[str, str]:
     """
-    Convierte una lista de métricas a un diccionario de columnas.
+    Convert a list of metrics to a column mapping dictionary.
     
     Args:
-        metrics: Lista de nombres de métricas (e.g., ['co_mean', 'no_mean'])
+        metrics: List of metric names (e.g., ['co_mean', 'no_mean'])
     
     Returns:
-        Dict con {columna_original: nombre_metrica} (e.g., {'co_mean': 'co'})
+        Dict with {original_column: metric_name} (e.g., {'co_mean': 'co'})
     
     Examples:
         >>> build_metric_columns(['co_mean'])
@@ -23,7 +25,6 @@ def build_metric_columns(metrics: List[str]) -> Dict[str, str]:
     """
     metric_columns = {}
     for metric in metrics:
-        # Remueve el sufijo '_mean' para obtener el nombre de la métrica
         metric_name = metric.replace('_mean', '')
         metric_columns[metric] = metric_name
     return metric_columns
@@ -37,38 +38,33 @@ def aggregate_to_long_format(
     version: Optional[str] = None
 ) -> pl.DataFrame:
     """
-    Convierte datos de formato wide a long y agrega por hora
+    Convert data from wide to long format and aggregate by hour.
     
     Args:
-        df: DataFrame de polars
-        time_col: nombre de la columna de tiempo
-        location_col: nombre de la columna de ubicación
-        metric_columns: dict con {columna_original: nombre_metrica} ej: {"co_mean": "co"}
-        version: versión del pipeline
+        df: Polars DataFrame in wide format
+        time_col: Name of the time column
+        location_col: Name of the location column
+        metric_columns: Dict with {original_column: metric_name}
+        version: Pipeline version string
     
     Returns:
-        pl.DataFrame: DataFrame transformado en formato long
+        pl.DataFrame: Transformed DataFrame in long format with standard schema
     
     Raises:
-        ValueError: Si metric_columns es None o está vacío
+        ValueError: If metric_columns is None or empty
     """
     if not metric_columns:
         raise ValueError("metric_columns cannot be None or empty")
 
-    # Handle empty DataFrames (no new data in incremental mode)
+    # Handle empty DataFrames
     if df.is_empty() or len(df) == 0:
-        # Return empty DataFrame with expected schema (consistent timezone)
-        # Include all columns that would be present with data
-        return pl.DataFrame({
-            time_col: pl.Series(dtype=pl.Datetime('us', 'UTC')),
-            location_col: pl.Series(dtype=pl.Utf8),
-            "metrica": pl.Series(dtype=pl.Utf8),
-            "valor": pl.Series(dtype=pl.Float64),
-            "count_ok": pl.Series(dtype=pl.UInt32),
-            "version_pipeline": pl.Series(dtype=pl.Utf8)
-        }).rename({"version_pipeline": "version"})
+        return create_empty_output_dataframe()
 
+    # Filter only valid status records
     filtered_df = df.filter(pl.col("status") == "k")
+    
+    if filtered_df.is_empty():
+        return create_empty_output_dataframe()
 
     frames = []
     for col_name, metric_name in metric_columns.items():
@@ -81,7 +77,7 @@ def aggregate_to_long_format(
             .agg([
                 pl.lit(metric_name).alias("metrica"),
                 pl.col(col_name).mean().alias("valor"),
-                pl.col("status").eq("k").sum().alias("count_ok"),
+                pl.col("status").eq("k").sum().cast(pl.UInt32).alias("count_ok"),
                 pl.lit(version).alias("version")
             ])
         )
@@ -89,11 +85,10 @@ def aggregate_to_long_format(
 
     result = pl.concat(frames)
 
-    # Ensure consistent timestamp format across all DataFrames
-    if time_col in result.columns:
-        result = result.with_columns(
-            pl.col(time_col).cast(pl.Datetime('us', 'UTC')).alias(time_col)
-        )
-
-    return result
-
+    # Ensure consistent schema
+    result = result.with_columns(
+        pl.col(time_col).cast(pl.Datetime('us', 'UTC')).alias(time_col)
+    )
+    
+    # Ensure column order matches schema
+    return result.select(OUTPUT_COLUMNS)
