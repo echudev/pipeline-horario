@@ -140,7 +140,7 @@ def export_to_bigquery(
         pandas_df = df.to_pandas()
         
         job_config = bigquery.LoadJobConfig(
-            write_disposition="WRITE_TRUNCATE",
+            write_disposition="WRITE_APPEND",
             schema=get_bigquery_schema(),
         )
         

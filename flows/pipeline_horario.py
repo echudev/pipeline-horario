@@ -50,9 +50,10 @@ TRANSFORM_CACHE_EXPIRATION = timedelta(hours=24)
 @task(
     name="fetch_pollutant_data",
     retries=2,
-    retry_delay_seconds=60,
-    cache_policy=INPUTS,
-    cache_expiration=FETCH_CACHE_EXPIRATION,
+    retry_delay_seconds=5,
+    #cache_policy=INPUTS,
+    #cache_expiration=FETCH_CACHE_EXPIRATION,
+    #refresh_cache=True,  # TODO: remove after testing fix
 )
 async def fetch_pollutant_data_task(
     pollutant: str, 
@@ -80,8 +81,8 @@ async def fetch_pollutant_data_task(
 
 @task(
     name="transform_pollutant_data",
-    cache_policy=INPUTS,
-    cache_expiration=TRANSFORM_CACHE_EXPIRATION,
+    #cache_policy=INPUTS,
+    #cache_expiration=TRANSFORM_CACHE_EXPIRATION,
 )
 def transform_pollutant_data_task(
     pollutant: str, 
@@ -182,8 +183,8 @@ async def save_pipeline_state_task(
 async def pipeline_horario(
     pollutants: Optional[List[str]] = None,
     export_excel: bool = False,
-    export_bigquery: bool = False,
-    export_motherduck: bool = True,
+    export_bigquery: bool = True,
+    export_motherduck: bool = False,
     incremental: bool = True,
     state_block_name: str = "pipeline-state",
 ) -> pl.DataFrame:

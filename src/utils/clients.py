@@ -15,7 +15,7 @@ import polars as pl
 
 from config.settings import get_settings
 from config.pollutants import TABLE_CONFIG
-from .datetime_utils import ensure_utc, add_hours, get_previous_hour_start, iter_hours
+from .datetime_utils import ensure_utc, add_hours, get_previous_hour_start, get_current_hour_start, iter_hours
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,7 @@ async def fetch_incremental_data(
         return await fetch_data(client, data_type)
     
     start_time = add_hours(ensure_utc(last_processed_hour), 1)
-    end_time = get_previous_hour_start()
+    end_time = get_current_hour_start()
     
     # Check if there's new data to fetch
     if start_time >= end_time:
